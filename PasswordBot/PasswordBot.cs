@@ -5,6 +5,7 @@ using Microsoft.Bot.Builder;
 using Microsoft.Bot.Configuration;
 using Microsoft.Bot.Schema;
 using Microsoft.Bot.Builder.Dialogs;
+using Newtonsoft.Json;
 
 namespace PasswordNotificationBot
 {
@@ -35,14 +36,18 @@ namespace PasswordNotificationBot
 
         private string AppId { get; }
 
+        private async Task SendEventNotofication(ITurnContext turnContext, string eventMessage)
+        {
+            PasswordNotfications notifications = await _passwordNotificationsPropertyAccessor.GetAsync(turnContext, () => new PasswordNotfications());
+            PasswordEventNotification passwordEventNotification = JsonConvert.DeserializeObject<PasswordEventNotification>(eventMessage);
+
+            PasswordNotfications.NotificationData eventUserData = notifications[passwordEventNotification.PasswordEvent.UserID];
+
+            await SendNotificationsAsync(turnContext.Adapter, AppId, eventUserData);
+        }
 
         public async Task OnTurnAsync(ITurnContext turnContext, CancellationToken cancellationToken = default(CancellationToken))
         {
-            if (turnContext.Activity.ChannelId == "emulator" || turnContext.Activity.ChannelId =="directline")
-            {
-
-            }
-
 
             if (turnContext.Activity.Type != ActivityTypes.Message)
             {
@@ -51,17 +56,30 @@ namespace PasswordNotificationBot
             }
             else
             {
-                PasswordNotfications notifications = await _passwordNotificationsPropertyAccessor.GetAsync(turnContext, () => new PasswordNotfications());
 
-                // Get the user's text input for the message.
-                var text = turnContext.Activity.Text.Trim().ToLowerInvariant();
+                //var msgText = turnContext.Activity.Text.Trim().ToLowerInvariant();
+                var msgText = turnContext.Activity.Text.Trim();
+
+                if (turnContext.Activity.ChannelId == "emulator" || turnContext.Activity.ChannelId == "directline")
+                {
+                    //Test the message to determine if it contains a notificaiton commands
+                    if (msgText.Contains("PasswordEventNotification"))
+                    {
+                        await SendEventNotofication(turnContext, msgText);
+                        await turnContext.SendActivityAsync("Notifications Sent");
+
+                        return;
+                    }
+                }
+
+                PasswordNotfications notifications = await _passwordNotificationsPropertyAccessor.GetAsync(turnContext, () => new PasswordNotfications());
 
                 // Run the DialogSet - let the framework identify the current state of the dialog from
                 // the dialog stack and figure out what (if any) is the active dialog.
                 var dialogContext = await _dialogs.CreateContextAsync(turnContext, cancellationToken);
                 var results = await dialogContext.ContinueDialogAsync(cancellationToken);
 
-                switch (text)
+                switch (msgText)
                 {
                     case "notify":
                     case "notify me":
@@ -124,6 +142,34 @@ namespace PasswordNotificationBot
                 // Save the new turn count into the conversation state.
                 await _accessors.ConversationState.SaveChangesAsync(turnContext, false, cancellationToken);
             }
+        }
+
+        private async Task SendNotificationsAsync(
+            BotAdapter adapter,
+            string botId,
+            PasswordNotfications.NotificationData notification,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            await adapter.ContinueConversationAsync(botId, notification.Conversation, CreateCallback(notification), cancellationToken);
+        }
+
+        // Creates the turn logic to use for the proactive message.
+        private BotCallbackHandler CreateCallback(PasswordNotfications.NotificationData notification)
+        {
+            return async (turnContext, token) =>
+            {
+                // Get the job log from state, and retrieve the job.
+                PasswordNotfications notifications = await _passwordNotificationsPropertyAccessor.GetAsync(turnContext, () => new PasswordNotfications());
+
+                // Set the new property
+                await _passwordNotificationsPropertyAccessor.SetAsync(turnContext, notifications);
+
+                // Now save it into the JobState
+                await _notificationState.SaveChangesAsync(turnContext);
+
+                // Send the user a proactive confirmation message.
+                await turnContext.SendActivityAsync($"Password for {notification.UserID} is about to expire.");
+            };
         }
 
         private PasswordNotfications.NotificationData CreateNotification(ITurnContext turnContext, PasswordNotfications notifications, string userId)
