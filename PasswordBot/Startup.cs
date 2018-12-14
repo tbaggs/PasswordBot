@@ -4,6 +4,7 @@ using System.Linq;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Bot.Builder;
+using Microsoft.Bot.Builder.BotFramework;
 using Microsoft.Bot.Builder.Dialogs;
 using Microsoft.Bot.Builder.Integration;
 using Microsoft.Bot.Builder.Integration.AspNet.Core;
@@ -35,42 +36,14 @@ namespace PasswordNotificationBot
             Configuration = builder.Build();
         }
 
-        /// <summary>
-        /// Gets the configuration that represents a set of key/value application configuration properties.
-        /// </summary>
-        /// <value>
-        /// The <see cref="IConfiguration"/> that represents a set of key/value application configuration properties.
-        /// </value>
         public IConfiguration Configuration { get; }
 
-        /// <summary>
-        /// This method gets called by the runtime. Use this method to add services to the container.
-        /// </summary>
-        /// <param name="services">The <see cref="IServiceCollection"/> specifies the contract for a collection of service descriptors.</param>
-        /// <seealso cref="IStatePropertyAccessor{T}"/>
-        /// <seealso cref="https://docs.microsoft.com/en-us/aspnet/web-api/overview/advanced/dependency-injection"/>
-        /// <seealso cref="https://docs.microsoft.com/en-us/azure/bot-service/bot-service-manage-channels?view=azure-bot-service-4.0"/>
         public void ConfigureServices(IServiceCollection services)
         {
-            var environment = _isProduction ? "production" : "development";
+            IStorage dataStore;
 
-            // The Memory Storage used here is for local bot debugging only. When the bot
-            // is restarted, everything stored in memory will be gone.
-            IStorage dataStore = new MemoryStorage();
-
-
-            // Create PasswordNotificationState object.
-            // The Password Notification State object is where we persist anything at the notification-scope.
-            // Note: It's independent of any user or conversation.
-            PasswordNotificationState notificationsState = new PasswordNotificationState(dataStore);
-
-            ConversationState conversationState = new ConversationState(dataStore);
-            UserState userState = new UserState(dataStore);
-            DialogState conversationDialogState = new DialogState();
-
-            // Make it available to our bot
-            services.AddSingleton(sp => notificationsState);
-
+            var environment = Configuration.GetSection("environment")?.Value == "production" ? "production" : "development";
+            _isProduction = environment == "production";
 
             var secretKey = Configuration.GetSection("botFileSecret")?.Value;
             var botFilePath = Configuration.GetSection("botFilePath")?.Value;
@@ -84,6 +57,42 @@ namespace PasswordNotificationBot
             var botConfig = BotConfiguration.Load(@".\PasswordBot.bot", secretKey);
             services.AddSingleton(sp => botConfig ?? throw new InvalidOperationException($"The .bot configuration file could not be loaded. botFilePath: {botFilePath}"));
 
+
+            // The Memory Storage used here is for local bot debugging only. When the bot
+            // is restarted, everything stored in memory will be gone.
+            if (!_isProduction)
+            {
+                dataStore = new MemoryStorage();
+            }
+            else
+            {
+                // //Storage configuration name or ID from the .bot file.
+                const string StorageConfigurationId = "blob";
+                var blobConfig = botConfig.FindServiceByNameOrId(StorageConfigurationId);
+
+                if (!(blobConfig is BlobStorageService blobStorageConfig))
+                {
+                    throw new InvalidOperationException($"The .bot file does not contain an blob storage with name '{StorageConfigurationId}'.");
+                }
+
+                //Default container name.
+                const string DefaultBotContainer = "passwordnotificationbot";
+                var storageContainer = string.IsNullOrWhiteSpace(blobStorageConfig.Container) ? DefaultBotContainer : blobStorageConfig.Container;
+                dataStore = new Microsoft.Bot.Builder.Azure.AzureBlobStorage(blobStorageConfig.ConnectionString, storageContainer);
+            }
+
+            // Create PasswordNotificationState object.
+            // The Password Notification State object is where we persist anything at the notification-scope.
+            // Note: It's independent of any user or conversation.
+            PasswordNotificationState notificationsState = new PasswordNotificationState(dataStore);
+
+            // Make it available to our bot
+            services.AddSingleton(sp => notificationsState);
+
+            ConversationState conversationState = new ConversationState(dataStore);
+            UserState userState = new UserState(dataStore);
+            DialogState conversationDialogState = new DialogState();
+
             services.AddBot<PasswordBot>(options =>
             {
                 // Retrieve current endpoint.
@@ -94,8 +103,8 @@ namespace PasswordNotificationBot
                 }
 
                 options.CredentialProvider = new SimpleCredentialProvider(endpointService.AppId, endpointService.AppPassword);
+                options.ChannelProvider = new ConfigurationChannelProvider(Configuration);
 
-                
                 // Creates a logger for the application to use.
                 ILogger logger = _loggerFactory.CreateLogger<PasswordBot>();
 

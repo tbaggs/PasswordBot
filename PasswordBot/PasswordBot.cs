@@ -43,7 +43,7 @@ namespace PasswordNotificationBot
 
             PasswordNotfications.NotificationData eventUserData = notifications[passwordEventNotification.PasswordEvent.UserID];
 
-            await SendNotificationsAsync(turnContext.Adapter, AppId, eventUserData);
+            await SendNotificationsAsync(turnContext.Adapter, AppId, eventUserData, passwordEventNotification);
         }
 
         public async Task OnTurnAsync(ITurnContext turnContext, CancellationToken cancellationToken = default(CancellationToken))
@@ -148,13 +148,15 @@ namespace PasswordNotificationBot
             BotAdapter adapter,
             string botId,
             PasswordNotfications.NotificationData notification,
-            CancellationToken cancellationToken = default(CancellationToken))
+            PasswordEventNotification passwordEventNotification,
+            CancellationToken cancellationToken = default(CancellationToken)
+            )
         {
-            await adapter.ContinueConversationAsync(botId, notification.Conversation, CreateCallback(notification), cancellationToken);
+            await adapter.ContinueConversationAsync(botId, notification.Conversation, CreateCallback(notification, passwordEventNotification), cancellationToken);
         }
 
         // Creates the turn logic to use for the proactive message.
-        private BotCallbackHandler CreateCallback(PasswordNotfications.NotificationData notification)
+        private BotCallbackHandler CreateCallback(PasswordNotfications.NotificationData notification, PasswordEventNotification passwordEventNotification)
         {
             return async (turnContext, token) =>
             {
@@ -168,7 +170,7 @@ namespace PasswordNotificationBot
                 await _notificationState.SaveChangesAsync(turnContext);
 
                 // Send the user a proactive confirmation message.
-                await turnContext.SendActivityAsync($"Password for {notification.UserID} is about to expire.");
+                await turnContext.SendActivityAsync($"Password for {notification.UserID} is about to expire on {passwordEventNotification.PasswordEvent.PasswordExpirationDate}.");
             };
         }
 
@@ -188,20 +190,7 @@ namespace PasswordNotificationBot
 
         private async Task OnSystemActivityAsync(ITurnContext turnContext)
         {
-            // On a job completed event, mark the job as complete and notify the user.
-            if (turnContext.Activity.Type is ActivityTypes.Event)
-            {
-            //    var jobLog = await _jobLogPropertyAccessor.GetAsync(turnContext, () => new JobLog());
-            //    var activity = turnContext.Activity.AsEventActivity();
-            //    if (activity.Name == JobCompleteEventName
-            //        && activity.Value is long timestamp
-            //        && jobLog.ContainsKey(timestamp)
-            //        && !jobLog[timestamp].Completed)
-            //    {
-            //        await CompleteJobAsync(turnContext.Adapter, AppId, jobLog[timestamp]);
-            //    }
-            }
-            else if (turnContext.Activity.Type is ActivityTypes.ConversationUpdate)
+            if (turnContext.Activity.Type is ActivityTypes.ConversationUpdate)
             {
                 if (turnContext.Activity.MembersAdded != null)
                 {
